@@ -1,11 +1,16 @@
 
 import 'dart:async';
 import 'package:flutter/material.dart';
-import 'package:http/http.dart' as http;
-import 'package:html/parser.dart' as html_parser;
+import 'package:supabase_flutter/supabase_flutter.dart';
 
-void main() {
+Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+
+  await Supabase.initialize(
+    url: 'https://oapuddsaszhnmernkowu.supabase.co',
+    anonKey: 'sb_publishable_gqxmW0Xk6klDzLobAWmZog_hqMV9Es0',
+  );
+
   runApp(const SudanRateApp());
 }
 
@@ -48,6 +53,8 @@ class HomePage extends StatefulWidget {
 }
 
 class _HomePageState extends State<HomePage> {
+  final supabase = Supabase.instance.client;
+
   final List<CurrencyRate> currencies = [
     CurrencyRate(
       name: 'الريال السعودي',
@@ -71,16 +78,14 @@ class _HomePageState extends State<HomePage> {
   DateTime? lastFetched;
   Timer? refreshTimer;
 
-  static const String sourceUrl =
-      'https://ratesudan.com/rates';
-
   @override
   void initState() {
     super.initState();
+
     fetchRates();
 
     refreshTimer = Timer.periodic(
-      const Duration(minutes: 15),
+      const Duration(minutes: 5),
       (_) => fetchRates(),
     );
   }
@@ -91,53 +96,16 @@ class _HomePageState extends State<HomePage> {
     super.dispose();
   }
 
-  String cleanNumber(String value) {
-    return value.replaceAll(',', '').trim();
-  }
+  String formatRate(dynamic value) {
+    final number = value is num
+        ? value
+        : num.tryParse(value.toString());
 
-  Future<Map<String, List<String>>> readRates(
-    String html,
-  ) async {
-    final document = html_parser.parse(html);
-    final rows = document.querySelectorAll('tr');
-
-    final Map<String, List<String>> results = {};
-
-    final numberPattern = RegExp(
-      r'\d[\d,]*(?:\.\d+)?',
-    );
-
-    for (final row in rows) {
-      final text = row.text
-          .replaceAll('\u00a0', ' ')
-          .replaceAll(RegExp(r'\s+'), ' ')
-          .trim();
-
-      for (final code in ['USD', 'SAR', 'EGP']) {
-        if (results.containsKey(code)) continue;
-
-        final codePattern = RegExp(
-          '\\b$code\\b',
-          caseSensitive: false,
-        );
-
-        if (!codePattern.hasMatch(text)) continue;
-
-        final numbers = numberPattern
-            .allMatches(text)
-            .map((m) => m.group(0)!)
-            .toList();
-
-        if (numbers.length >= 4) {
-          results[code] = [
-            cleanNumber(numbers[0]),
-            cleanNumber(numbers[2]),
-          ];
-        }
-      }
+    if (number == null || number <= 0) {
+      return '--';
     }
 
-    return results;
+    return number.toString();
   }
 
   Future<void> fetchRates() async {
@@ -149,49 +117,59 @@ class _HomePageState extends State<HomePage> {
     });
 
     try {
-      final response = await http.get(
-        Uri.parse(sourceUrl),
-        headers: {
-          'User-Agent': 'Mozilla/5.0',
-          'Accept': 'text/html',
-          'Accept-Language': 'ar,en;q=0.9',
-          'Cache-Control': 'no-cache',
-        },
-      ).timeout(const Duration(seconds: 30));
+      final response = await supabase
+          .from('exchange_rates')
+          .select('currency, buy, sell, updated_at');
 
-      if (response.statusCode != 200) {
-        throw Exception(
-          'خطأ الموقع: ${response.statusCode}',
+      final Map<String, Map<String, dynamic>> results = {};
+
+      DateTime? latestUpdate;
+      bool hasRealRates = false;
+
+      for (final row in response) {
+        final code = row['currency'].toString().toUpperCase();
+
+        results[code] = row;
+
+        final buy = num.tryParse(row['buy'].toString()) ?? 0;
+        final sell = num.tryParse(row['sell'].toString()) ?? 0;
+
+        if (buy > 0 || sell > 0) {
+          hasRealRates = true;
+        }
+
+        final date = DateTime.tryParse(
+          row['updated_at']?.toString() ?? '',
         );
+
+        if (date != null &&
+            (latestUpdate == null ||
+                date.isAfter(latestUpdate))) {
+          latestUpdate = date;
+        }
       }
 
-      final results = await readRates(response.body);
-
-      if (results.length != 3) {
-        throw Exception(
-          'وصلنا إلى الموقع، لكن لم نعثر على صفوف العملات الثلاث. قد تكون البيانات محملة بطريقة لا تظهر في HTML.',
-        );
+      for (final currency in currencies) {
+        if (!results.containsKey(currency.code)) {
+          throw Exception(
+            'لم نعثر على بيانات ${currency.code} في قاعدة البيانات.',
+          );
+        }
       }
 
       if (!mounted) return;
 
       setState(() {
         for (final currency in currencies) {
-          final values = results[currency.code]!;
+          final row = results[currency.code]!;
 
-          currency.buy = values[0];
-          currency.sell = values[1];
+          currency.buy = formatRate(row['buy']);
+          currency.sell = formatRate(row['sell']);
         }
 
-        lastFetched = DateTime.now();
+        lastFetched = hasRealRates ? latestUpdate : null;
         error = null;
       });
-    } on TimeoutException {
-      if (mounted) {
-        setState(() {
-          error = 'انتهت مهلة الاتصال بالموقع. حاول مرة أخرى.';
-        });
-      }
     } catch (e) {
       if (mounted) {
         setState(() {
@@ -211,7 +189,9 @@ class _HomePageState extends State<HomePage> {
   }
 
   String formatTime(DateTime? date) {
-    if (date == null) return 'لم يتم جلب البيانات بعد';
+    if (date == null) {
+      return 'لم يتم تحديث السعر بعد';
+    }
 
     final d = date.toLocal();
 
@@ -347,7 +327,9 @@ class _HomePageState extends State<HomePage> {
                         ),
                       ),
                       SizedBox(height: 6),
-                      Text('السوق الموازي مقابل الجنيه السوداني'),
+                      Text(
+                        'السوق الموازي مقابل الجنيه السوداني',
+                      ),
                     ],
                   ),
                 ),
@@ -358,7 +340,9 @@ class _HomePageState extends State<HomePage> {
               if (loading) ...[
                 const LinearProgressIndicator(),
                 const SizedBox(height: 12),
-                const Center(child: Text('جارٍ تحديث الأسعار...')),
+                const Center(
+                  child: Text('جارٍ تحديث الأسعار...'),
+                ),
                 const SizedBox(height: 12),
               ],
 
@@ -397,7 +381,7 @@ class _HomePageState extends State<HomePage> {
 
               Center(
                 child: Text(
-                  'وقت جلب البيانات: ${formatTime(lastFetched)}',
+                  'آخر تحديث للأسعار: ${formatTime(lastFetched)}',
                   textAlign: TextAlign.center,
                   style: const TextStyle(
                     color: Colors.grey,
@@ -410,7 +394,7 @@ class _HomePageState extends State<HomePage> {
 
               const Center(
                 child: Text(
-                  'المصدر: Rate Sudan',
+                  'المصدر: لوحة سعر السودان',
                   style: TextStyle(fontWeight: FontWeight.bold),
                 ),
               ),
