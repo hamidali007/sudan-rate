@@ -1,6 +1,9 @@
 
 import json
+import os
 import re
+import urllib.error
+import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import quote_plus
@@ -28,6 +31,67 @@ def find_number(text, patterns, currency):
     raise RuntimeError(
         f"لم يتم العثور على سعر {currency}"
     )
+
+
+def supabase_request(base_url, key, method, path, body=None):
+    """طلب بسيط إلى Supabase REST API بدون أي مكتبة إضافية."""
+    request = urllib.request.Request(
+        f"{base_url.rstrip('/')}/rest/v1/{path}",
+        data=json.dumps(body).encode("utf-8") if body is not None else None,
+        method=method,
+        headers={
+            "apikey": key,
+            "Authorization": f"Bearer {key}",
+            "Content-Type": "application/json",
+            "Prefer": "return=representation",
+        },
+    )
+
+    try:
+        with urllib.request.urlopen(request, timeout=30) as response:
+            return json.loads(response.read().decode("utf-8") or "[]")
+    except urllib.error.HTTPError as error:
+        details = error.read().decode("utf-8", errors="replace")
+        raise RuntimeError(
+            f"فشل طلب Supabase ({error.code}): {details}"
+        ) from error
+
+
+def push_to_supabase(rates):
+    """يكتب الأسعار في جدول exchange_rates الذي يقرأ منه التطبيق."""
+    base_url = os.environ.get("SUPABASE_URL")
+    key = os.environ.get("SUPABASE_SERVICE_KEY")
+
+    if not base_url or not key:
+        print(
+            "تنبيه: SUPABASE_URL أو SUPABASE_SERVICE_KEY غير مضبوط، "
+            "تم تخطي الرفع إلى Supabase."
+        )
+        return
+
+    now = datetime.now(timezone.utc).isoformat()
+
+    for code, values in rates.items():
+        payload = {
+            "buy": values["buy"],
+            "sell": values["sell"],
+            "updated_at": now,
+        }
+
+        updated = supabase_request(
+            base_url, key, "PATCH",
+            f"exchange_rates?currency=eq.{code}",
+            payload,
+        )
+
+        if not updated:
+            supabase_request(
+                base_url, key, "POST",
+                "exchange_rates",
+                {"currency": code, **payload},
+            )
+
+        print(f"تم تحديث {code} في Supabase")
 
 
 def main():
@@ -147,6 +211,8 @@ def main():
     )
 
     print(json.dumps(output, ensure_ascii=False, indent=2))
+
+    push_to_supabase(rates)
 
 
 if __name__ == "__main__":
