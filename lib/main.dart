@@ -30,15 +30,13 @@ class CurrencyRate {
   final String name;
   final String code;
   final String flag;
-  String buy;
-  String sell;
+  String buy = '--';
+  String sell = '--';
 
   CurrencyRate({
     required this.name,
     required this.code,
     required this.flag,
-    this.buy = '--',
-    this.sell = '--',
   });
 }
 
@@ -74,12 +72,11 @@ class _HomePageState extends State<HomePage> {
   Timer? refreshTimer;
 
   static const String sourceUrl =
-      'https://www.ratesudan.com/rates';
+      'https://ratesudan.com/rates';
 
   @override
   void initState() {
     super.initState();
-
     fetchRates();
 
     refreshTimer = Timer.periodic(
@@ -92,6 +89,55 @@ class _HomePageState extends State<HomePage> {
   void dispose() {
     refreshTimer?.cancel();
     super.dispose();
+  }
+
+  String cleanNumber(String value) {
+    return value.replaceAll(',', '').trim();
+  }
+
+  Future<Map<String, List<String>>> readRates(
+    String html,
+  ) async {
+    final document = html_parser.parse(html);
+    final rows = document.querySelectorAll('tr');
+
+    final Map<String, List<String>> results = {};
+
+    final numberPattern = RegExp(
+      r'\d[\d,]*(?:\.\d+)?',
+    );
+
+    for (final row in rows) {
+      final text = row.text
+          .replaceAll('\u00a0', ' ')
+          .replaceAll(RegExp(r'\s+'), ' ')
+          .trim();
+
+      for (final code in ['USD', 'SAR', 'EGP']) {
+        if (results.containsKey(code)) continue;
+
+        final codePattern = RegExp(
+          '\\b$code\\b',
+          caseSensitive: false,
+        );
+
+        if (!codePattern.hasMatch(text)) continue;
+
+        final numbers = numberPattern
+            .allMatches(text)
+            .map((m) => m.group(0)!)
+            .toList();
+
+        if (numbers.length >= 4) {
+          results[code] = [
+            cleanNumber(numbers[0]),
+            cleanNumber(numbers[2]),
+          ];
+        }
+      }
+    }
+
+    return results;
   }
 
   Future<void> fetchRates() async {
@@ -108,60 +154,22 @@ class _HomePageState extends State<HomePage> {
         headers: {
           'User-Agent': 'Mozilla/5.0',
           'Accept': 'text/html',
-          'Accept-Language': 'en-US,en;q=0.9',
+          'Accept-Language': 'ar,en;q=0.9',
+          'Cache-Control': 'no-cache',
         },
       ).timeout(const Duration(seconds: 30));
 
       if (response.statusCode != 200) {
         throw Exception(
-          'خطأ في الاتصال بالمصدر: ${response.statusCode}',
+          'خطأ الموقع: ${response.statusCode}',
         );
       }
 
-      final document = html_parser.parse(response.body);
+      final results = await readRates(response.body);
 
-      final Map<String, List<String>> found = {};
-
-      final numberPattern = RegExp(
-        r'\d[\d,.]*',
-      );
-
-      // قراءة الجداول وصفوف البيانات من صفحة المصدر.
-      final rows = document.querySelectorAll(
-        'tr, [role="row"], .row, .rate-row',
-      );
-
-      for (final row in rows) {
-        final text = row.text
-            .replaceAll('\u00a0', ' ')
-            .replaceAll(RegExp(r'\s+'), ' ')
-            .trim();
-
-        for (final code in ['USD', 'SAR', 'EGP']) {
-          if (!RegExp(
-            '\\b$code\\b',
-            caseSensitive: false,
-          ).hasMatch(text)) {
-            continue;
-          }
-
-          final numbers = numberPattern
-              .allMatches(text)
-              .map((m) => m.group(0)!)
-              .toList();
-
-          if (numbers.length >= 4) {
-            found[code] = [
-              numbers[0],
-              numbers[2],
-            ];
-          }
-        }
-      }
-
-      if (found.length != 3) {
+      if (results.length != 3) {
         throw Exception(
-          'وصلنا إلى الموقع، لكن لم نستطع قراءة بيانات العملات الثلاث. قد تكون الصفحة محمّلة بطريقة ديناميكية.',
+          'وصلنا إلى الموقع، لكن لم نعثر على صفوف العملات الثلاث. قد تكون البيانات محملة بطريقة لا تظهر في HTML.',
         );
       }
 
@@ -169,7 +177,7 @@ class _HomePageState extends State<HomePage> {
 
       setState(() {
         for (final currency in currencies) {
-          final values = found[currency.code]!;
+          final values = results[currency.code]!;
 
           currency.buy = values[0];
           currency.sell = values[1];
@@ -187,7 +195,10 @@ class _HomePageState extends State<HomePage> {
     } catch (e) {
       if (mounted) {
         setState(() {
-          error = e.toString().replaceFirst('Exception: ', '');
+          error = e.toString().replaceFirst(
+            'Exception: ',
+            '',
+          );
         });
       }
     } finally {
@@ -200,9 +211,7 @@ class _HomePageState extends State<HomePage> {
   }
 
   String formatTime(DateTime? date) {
-    if (date == null) {
-      return 'لم يتم التحديث بعد';
-    }
+    if (date == null) return 'لم يتم جلب البيانات بعد';
 
     final d = date.toLocal();
 
@@ -211,12 +220,11 @@ class _HomePageState extends State<HomePage> {
         '${d.minute.toString().padLeft(2, '0')}';
   }
 
-  Widget buildCurrencyCard(CurrencyRate currency) {
+  Widget currencyCard(CurrencyRate currency) {
     return Card(
       margin: const EdgeInsets.only(bottom: 14),
-      elevation: 2,
       child: Padding(
-        padding: const EdgeInsets.all(16),
+        padding: const EdgeInsets.all(17),
         child: Column(
           children: [
             Row(
@@ -237,10 +245,7 @@ class _HomePageState extends State<HomePage> {
                 ),
                 Text(
                   currency.code,
-                  style: const TextStyle(
-                    color: Colors.grey,
-                    fontWeight: FontWeight.bold,
-                  ),
+                  style: const TextStyle(color: Colors.grey),
                 ),
               ],
             ),
@@ -266,11 +271,6 @@ class _HomePageState extends State<HomePage> {
                     ],
                   ),
                 ),
-                Container(
-                  width: 1,
-                  height: 45,
-                  color: Colors.grey.shade300,
-                ),
                 Expanded(
                   child: Column(
                     children: [
@@ -292,13 +292,10 @@ class _HomePageState extends State<HomePage> {
                 ),
               ],
             ),
-            const SizedBox(height: 10),
+            const SizedBox(height: 8),
             const Text(
               'جنيه سوداني',
-              style: TextStyle(
-                fontSize: 12,
-                color: Colors.grey,
-              ),
+              style: TextStyle(color: Colors.grey),
             ),
           ],
         ),
@@ -338,8 +335,8 @@ class _HomePageState extends State<HomePage> {
                     children: [
                       Icon(
                         Icons.currency_exchange,
-                        size: 48,
                         color: Colors.green,
+                        size: 45,
                       ),
                       SizedBox(height: 10),
                       Text(
@@ -356,14 +353,12 @@ class _HomePageState extends State<HomePage> {
                 ),
               ),
 
-              const SizedBox(height: 16),
+              const SizedBox(height: 15),
 
               if (loading) ...[
                 const LinearProgressIndicator(),
                 const SizedBox(height: 12),
-                const Center(
-                  child: Text('جارٍ جلب الأسعار...'),
-                ),
+                const Center(child: Text('جارٍ تحديث الأسعار...')),
                 const SizedBox(height: 12),
               ],
 
@@ -377,7 +372,7 @@ class _HomePageState extends State<HomePage> {
                         const Icon(
                           Icons.warning_amber_rounded,
                           color: Colors.orange,
-                          size: 30,
+                          size: 35,
                         ),
                         const SizedBox(height: 8),
                         Text(
@@ -396,13 +391,13 @@ class _HomePageState extends State<HomePage> {
                 ),
 
               for (final currency in currencies)
-                buildCurrencyCard(currency),
+                currencyCard(currency),
 
               const SizedBox(height: 12),
 
               Center(
                 child: Text(
-                  'آخر جلب للبيانات: ${formatTime(lastFetched)}',
+                  'وقت جلب البيانات: ${formatTime(lastFetched)}',
                   textAlign: TextAlign.center,
                   style: const TextStyle(
                     color: Colors.grey,
@@ -416,9 +411,7 @@ class _HomePageState extends State<HomePage> {
               const Center(
                 child: Text(
                   'المصدر: Rate Sudan',
-                  style: TextStyle(
-                    fontWeight: FontWeight.bold,
-                  ),
+                  style: TextStyle(fontWeight: FontWeight.bold),
                 ),
               ),
 
@@ -428,8 +421,8 @@ class _HomePageState extends State<HomePage> {
                 'الأسعار استرشادية وقد تختلف حسب المكتب والوقت.',
                 textAlign: TextAlign.center,
                 style: TextStyle(
-                  fontSize: 12,
                   color: Colors.grey,
+                  fontSize: 12,
                 ),
               ),
             ],
