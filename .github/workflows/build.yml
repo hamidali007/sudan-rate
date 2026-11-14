@@ -49,10 +49,24 @@ jobs:
       - name: Get dependencies
         run: flutter pub get
 
-      - name: Build APK
-        run: flutter build apk --release
+      - name: Build APK with detailed log
+        run: |
+          set +e
+          flutter build apk --release --verbose 2>&1 | tee build.log
+          RESULT=${PIPESTATUS[0]}
+          echo "BUILD_EXIT_CODE=$RESULT"
+          exit $RESULT
+
+      - name: Upload detailed build log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: sudan-rate-build-log
+          path: build.log
+          if-no-files-found: warn
 
       - name: Upload APK
+        if: success()
         uses: actions/upload-artifact@v4
         with:
           name: sudan-rate-apk
