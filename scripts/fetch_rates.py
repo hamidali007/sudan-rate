@@ -1,7 +1,6 @@
 
 from playwright.sync_api import sync_playwright
 
-
 URL = "https://www.ratesudan.com/rates"
 
 
@@ -11,7 +10,10 @@ def main():
 
         page = browser.new_page(
             locale="ar",
-            viewport={"width": 1365, "height": 900}
+            viewport={
+                "width": 1365,
+                "height": 900
+            }
         )
 
         response = page.goto(
@@ -20,13 +22,16 @@ def main():
             timeout=90000
         )
 
-        print("HTTP STATUS:", response.status if response else "No response")
+        print(
+            "HTTP STATUS:",
+            response.status if response else "No response"
+        )
+
         print("PAGE TITLE:", page.title())
         print("PAGE URL:", page.url)
 
         page.wait_for_timeout(10000)
 
-        # محاولة اختيار السوق الموازي
         buttons = page.get_by_role(
             "button",
             name="السوق الموازي"
@@ -36,7 +41,6 @@ def main():
             buttons.first.click()
             page.wait_for_timeout(5000)
 
-        # قراءة النص الظاهر في الصفحة
         text = page.locator("body").inner_text()
 
         print("\n========== PAGE TEXT ==========")
