@@ -1,0 +1,20 @@
+{
+  "source": "https://azzapress.com/archives/154617",
+  "source_name": "عزة برس",
+  "market": "parallel",
+  "fetched_at": "2026-11-14T04:46:40.633814+00:00",
+  "rates": {
+    "USD": {
+      "buy": 10900.0,
+      "sell": 10950.0
+    },
+    "SAR": {
+      "buy": 2904.498,
+      "sell": 2917.8214
+    },
+    "EGP": {
+      "buy": 204.1581,
+      "sell": 205.0946
+    }
+  }
+}
