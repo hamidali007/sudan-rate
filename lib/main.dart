@@ -1,6 +1,8 @@
 
 import 'dart:async';
+import 'dart:convert';
 import 'package:flutter/material.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 Future<void> main() async {
@@ -77,12 +79,13 @@ class _HomePageState extends State<HomePage> {
   String? error;
   DateTime? lastFetched;
   Timer? refreshTimer;
+  bool showingCache = false;
 
   @override
   void initState() {
     super.initState();
 
-    fetchRates();
+    loadCache().then((_) => fetchRates());
 
     refreshTimer = Timer.periodic(
       const Duration(minutes: 5),
@@ -94,6 +97,56 @@ class _HomePageState extends State<HomePage> {
   void dispose() {
     refreshTimer?.cancel();
     super.dispose();
+  }
+
+  Future<void> loadCache() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final raw = prefs.getString('cached_rates');
+      if (raw == null) return;
+
+      final data = jsonDecode(raw) as Map<String, dynamic>;
+      if (!mounted) return;
+
+      setState(() {
+        for (final currency in currencies) {
+          final row = data[currency.code] as Map<String, dynamic>?;
+          if (row != null) {
+            currency.buy = formatRate(row['buy']);
+            currency.sell = formatRate(row['sell']);
+          }
+        }
+
+        lastFetched = DateTime.tryParse(
+          data['updated_at']?.toString() ?? '',
+        );
+        showingCache = true;
+      });
+    } catch (_) {
+      // تجاهل أي خطأ في قراءة النسخة المحفوظة.
+    }
+  }
+
+  Future<void> saveCache(
+    Map<String, Map<String, dynamic>> results,
+    DateTime? updated,
+  ) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+
+      final data = <String, dynamic>{
+        for (final c in currencies)
+          c.code: {
+            'buy': results[c.code]!['buy'],
+            'sell': results[c.code]!['sell'],
+          },
+        'updated_at': updated?.toIso8601String(),
+      };
+
+      await prefs.setString('cached_rates', jsonEncode(data));
+    } catch (_) {
+      // فشل الحفظ لا يجب أن يعطل التطبيق.
+    }
   }
 
   String formatRate(dynamic value) {
@@ -169,14 +222,20 @@ class _HomePageState extends State<HomePage> {
 
         lastFetched = hasRealRates ? latestUpdate : null;
         error = null;
+        showingCache = false;
       });
+
+      await saveCache(results, latestUpdate);
     } catch (e) {
       if (mounted) {
         setState(() {
-          error = e.toString().replaceFirst(
-            'Exception: ',
-            '',
-          );
+          error = showingCache
+              ? 'تعذر تحديث الأسعار الآن، '
+                  'تُعرض آخر أسعار محفوظة على جهازك.'
+              : e.toString().replaceFirst(
+                  'Exception: ',
+                  '',
+                );
         });
       }
     } finally {
